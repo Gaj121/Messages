@@ -1,0 +1,72 @@
+name: Branded APK Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      brand_name:
+        description: 'App brand name'
+        required: true
+      package_name:
+        description: 'Application ID / package name'
+        required: false
+        default: ''
+      version_name:
+        description: 'Version name'
+        required: false
+        default: '1.0.0'
+      max_size_mb:
+        description: 'Max APK size in MB'
+        required: false
+        default: '10'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Apply branding (app name + package + version)
+        run: |
+          chmod +x .github/scripts/branding.sh || true
+          if [ -f .github/scripts/branding.sh ]; then
+            BRAND="\${{ inputs.brand_name }}" PKG="\${{ inputs.package_name }}" VER="\${{ inputs.version_name }}" .github/scripts/branding.sh
+          else
+            echo "NOTE: .github/scripts/branding.sh not found - branding skipped."
+          fi
+
+      - name: Build release APK
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew && ./gradlew assembleRelease --no-daemon
+          elif [ -f build.gradle.kts ] || [ -f build.gradle ]; then
+            gradle assembleRelease --no-daemon
+          else
+            echo "Gradle project not found. This repo must be an Android/Gradle project." && exit 1
+          fi
+
+      - name: Size check + collect APK
+        run: |
+          MAX="\${{ inputs.max_size_mb }}"
+          APK=$(find . -path ./node_modules -prune -o -name "*.apk" -print | head -1)
+          if [ -z "$APK" ]; then echo "APK not produced" && exit 1; fi
+          SIZE_MB=$(du -m "$APK" | cut -f1)
+          echo "APK: $APK ($SIZE_MB MB)"
+          if [ "$SIZE_MB" -gt "$MAX" ]; then
+            echo "APK is \${SIZE_MB}MB - over the \${MAX}MB limit." && exit 1
+          fi
+          mkdir -p out && cp "$APK" out/app-branded.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: branded-apk
+          path: out/app-branded.apk
